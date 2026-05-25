@@ -1,0 +1,159 @@
+/******************************************************
+ Smart Drain Monitoring System
+ Controller: ESP32
+ Features:
+ - Water Level Monitoring (Ultrasonic)
+ - Flow Detection
+ - Gas Detection
+ - Smart Blockage Logic
+ - LCD Display
+ - Buzzer Alert
+******************************************************/
+
+#include <LiquidCrystal_I2C.h>
+
+// ---------------- PIN DEFINITIONS ----------------
+#define TRIG_PIN 5
+#define ECHO_PIN 18
+
+#define FLOW_SENSOR_PIN 19
+
+#define GAS_SENSOR_PIN 34   // Analog pin
+
+#define BUZZER_PIN 23
+
+// ---------------- LCD SETUP ----------------
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// ---------------- VARIABLES ----------------
+long duration;
+float distance;
+float waterLevel;
+
+volatile int flowPulseCount = 0;
+float flowRate = 0;
+
+int gasValue = 0;
+
+// Thresholds (adjust after calibration)
+float WATER_THRESHOLD = 15.0;   // cm
+float FLOW_THRESHOLD = 2.0;     // low flow
+int GAS_THRESHOLD = 400;        // depends on sensor
+
+// ---------------- INTERRUPT FUNCTION ----------------
+void IRAM_ATTR countPulse() {
+  flowPulseCount++;
+}
+
+// ---------------- SETUP ----------------
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  pinMode(FLOW_SENSOR_PIN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), countPulse, RISING);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Drain");
+  delay(2000);
+}
+
+// ---------------- FUNCTIONS ----------------
+
+// Measure water level using ultrasonic
+float readWaterLevel() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  duration = pulseIn(ECHO_PIN, HIGH);
+
+  distance = duration * 0.034 / 2;
+
+  // Convert to water level (assuming sensor at top)
+  waterLevel = 30 - distance;  // adjust height
+
+  return waterLevel;
+}
+
+// Calculate flow rate
+float readFlowRate() {
+  flowPulseCount = 0;
+  delay(1000);  // 1 second measurement
+
+  // YF-S201 approx conversion
+  flowRate = flowPulseCount / 7.5;
+
+  return flowRate;
+}
+
+// Read gas sensor
+int readGas() {
+  return analogRead(GAS_SENSOR_PIN);
+}
+
+// ---------------- MAIN LOOP ----------------
+void loop() {
+
+  // Read all sensors
+  waterLevel = readWaterLevel();
+  flowRate = readFlowRate();
+  gasValue = readGas();
+
+  // Print to Serial Monitor
+  Serial.println("---- SENSOR DATA ----");
+  Serial.print("Water Level: ");
+  Serial.println(waterLevel);
+
+  Serial.print("Flow Rate: ");
+  Serial.println(flowRate);
+
+  Serial.print("Gas Value: ");
+  Serial.println(gasValue);
+
+  // ---------------- DECISION LOGIC ----------------
+
+  String status = "NORMAL";
+
+  // Blockage detection
+  if (waterLevel > WATER_THRESHOLD && flowRate < FLOW_THRESHOLD) {
+    status = "BLOCKED";
+    digitalWrite(BUZZER_PIN, HIGH);
+  }
+  // Warning condition
+  else if (waterLevel > WATER_THRESHOLD) {
+    status = "WARNING";
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+  // Gas danger
+  else if (gasValue > GAS_THRESHOLD) {
+    status = "GAS ALERT";
+    digitalWrite(BUZZER_PIN, HIGH);
+  }
+  else {
+    status = "NORMAL";
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+
+  // ---------------- LCD DISPLAY ----------------
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("WL:");
+  lcd.print(waterLevel);
+
+  lcd.setCursor(0, 1);
+  lcd.print(status);
+
+  // ---------------- DELAY ----------------
+  delay(2000);
+}
